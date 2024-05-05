@@ -1,7 +1,6 @@
 use std::borrow::Cow;
-use std::env;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use telegram_types::bot::methods::{
     ChatTarget, DeleteWebhook, GetMe, Method as TMethod, SendMessage, SetWebhook, TelegramResult,
     UpdateTypes,
@@ -25,11 +24,24 @@ impl<T: TMethod> From<T> for WebhookReply<T> {
     }
 }
 
+#[derive(Deserialize)]
+struct Config {
+    allowed_users_id: Vec<i64>,
+}
+
 struct Bot {
     pub token: String,
+    pub config: Config,
 }
 
 impl Bot {
+    fn new(token: String, config: String) -> Result<Self> {
+        let config: Config =
+            toml::from_str(&config).map_err(|e| Error::RustError(e.to_string()))?;
+
+        Ok(Self { token, config })
+    }
+
     async fn send_json_request<T: TMethod>(&self, _: T, method: Method) -> Result<Response> {
         let mut request_builder = RequestInit::new();
         request_builder.with_method(method);
@@ -75,10 +87,26 @@ impl Bot {
     }
 }
 
+const TOKEN: &str = "TOKEN";
+const CONFIG: &str = "CONFIG";
+const BUCKET: &str = "WiseAss";
+
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    let token = env::var("TOKEN").expect("TOKEN env variable should be set");
-    let bot = Bot { token };
+    let kv = env.kv(BUCKET)?;
+
+    let token = env
+        .secret(TOKEN)
+        // should panic in case no token is provided
+        .expect("TOKEN env variable can't be empty")
+        .to_string();
+    let config = kv
+        .get(CONFIG)
+        .text()
+        .await?
+        .expect("config is not provided");
+
+    let bot = Bot::new(token, config).expect("could not initialize the bot");
 
     // webhook
     let router = Router::with_data(bot).get_async("/", |req, ctx| async move {
@@ -93,7 +121,11 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
         if let Some(UpdateContent::Message(m)) = update.content {
             let bot = ctx.data;
-            return bot.process(&m);
+            if let Some(sender) = m.from.clone() {
+                // if bot.config.allowed_users_id.contains(&sender.id.0) {
+                return bot.process(&m);
+                // }
+            }
         }
 
         Response::empty()
