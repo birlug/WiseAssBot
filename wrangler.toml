@@ -2,9 +2,9 @@ name = "wiseass"
 main = "build/worker/shim.mjs"
 compatibility_date = "2024-05-05"
 
-[build]
-command = "cargo install -q worker-build && worker-build --release"
-
 kv_namespaces = [
   { binding = "KV_BINDING", id = "KV_ID" }
 ]
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
