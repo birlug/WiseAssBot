@@ -8,10 +8,11 @@ help: ## display help section
 
 .PHONY: deploy
 deploy: prepare ## deploy to cf workers
-	@ npx wrangler deploy
+	@ npx wrangler deploy --var BUCKET:$(KV_BINDING)
 
 .PHONY: config-upload
 config-upload: ## upload config to kv storage. "name" arg should be provided
+	@ npx wrangler secret put $(TOKEN)
 	@ npx wrangler kv:key put CONFIG --path=$(name) --namespace-id=$(KV_ID)
 
 .PHONY: prepare

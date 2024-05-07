@@ -1,1 +1,12 @@
-allowed_users_id = [7357]
+[bot]
+# whitelisted users id to run admin commands
+admin_users_id = [
+    7357
+]
+mastodon_api_key = ""
+
+[routes]
+# whitelisted ip addresses to access the routes
+allowed_ip = [
+    "127.0.0.1"
+]
