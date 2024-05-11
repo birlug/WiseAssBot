@@ -3,6 +3,7 @@
 admin_users_id = [
     7357
 ]
+report_chat_id = 7357
 mastodon_api_key = ""
 
 [routes]

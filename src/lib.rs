@@ -1,4 +1,5 @@
 mod bot;
+mod commands;
 mod config;
 
 use std::net::IpAddr;
@@ -36,8 +37,11 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     RESPONSE_DIR.files().for_each(|f| {
         let k = f.path().to_str().unwrap(); // safe to unwrap
         let r = f.contents_utf8().unwrap(); // safe to unwrap
-        bot.add_command(&format!("!{}", k), &r);
+        bot.commands
+            .insert(format!("!{}", k), Box::new(|b, m| b.reply(m, r)));
     });
+    bot.commands
+        .insert("!report".to_string(), Box::new(commands::report));
 
     // message handler
     let router = Router::with_data(bot).post_async("/updates", |mut req, ctx| async move {
@@ -53,17 +57,15 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 .map(|ip| ip.parse::<IpAddr>())
                 .unwrap() // safe to unwrap
                 .map_err(|e| Error::RustError(e.to_string()))?;
-            if !bot
+            if bot
                 .config
                 .routes
                 .allowed_ip
                 .iter()
                 .any(|cidr| cidr.contains(&ip))
             {
-                return Response::empty();
+                return bot.process(&m).await;
             }
-
-            return bot.process(&m);
         }
 
         Response::empty()

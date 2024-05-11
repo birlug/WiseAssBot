@@ -5,9 +5,11 @@ use std::collections::HashMap;
 use serde::Serialize;
 use telegram_types::bot::{
     methods::{ChatTarget, Method, SendMessage},
-    types::Message,
+    types::{ChatId, Message},
 };
 use worker::*;
+
+type FnCmd = dyn Fn(&Bot, &Message) -> Result<Response>;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WebhookReply<M: Method> {
@@ -25,15 +27,9 @@ impl<M: Method> From<M> for WebhookReply<M> {
     }
 }
 
-#[derive(Debug)]
-struct Command {
-    key: String,
-    response: String,
-}
-
 pub struct Bot {
     _token: String,
-    commands: HashMap<String, Command>,
+    pub commands: HashMap<String, Box<FnCmd>>,
     pub config: Config,
 }
 
@@ -49,31 +45,26 @@ impl Bot {
         })
     }
 
-    pub fn add_command(&mut self, key: &str, response: &str) {
-        let cmd = Command {
-            key: key.to_string(),
-            response: response.to_string(),
-        };
-        self.commands.insert(key.to_string(), cmd);
-    }
-
     pub fn reply(&self, msg: &Message, text: &str) -> Result<Response> {
+        let message_id = if let Some(replied) = &msg.reply_to_message {
+            replied.message_id
+        } else {
+            msg.message_id
+        };
+
         Response::from_json(&WebhookReply::from(
-            SendMessage::new(ChatTarget::Id(msg.chat.id), text).reply(msg.message_id),
+            SendMessage::new(ChatTarget::Id(msg.chat.id), text).reply(message_id),
         ))
     }
 
-    pub fn reply_to_parent(&self, msg: &Message, text: &str) -> Result<Response> {
-        let mut msg = Message::from(msg.clone());
-
-        if let Some(replied) = &msg.reply_to_message {
-            msg.message_id = replied.message_id;
-        }
-
-        self.reply(&msg, text)
+    pub fn send(&self, chat_id: ChatId, text: &str) -> Result<Response> {
+        Response::from_json(&WebhookReply::from(SendMessage::new(
+            ChatTarget::Id(chat_id),
+            text,
+        )))
     }
 
-    pub fn process(&self, msg: &Message) -> Result<Response> {
+    pub async fn process(&self, msg: &Message) -> Result<Response> {
         if let Some(command) = msg
             .text
             .as_ref()
@@ -81,10 +72,9 @@ impl Bot {
             .filter(|t| t.starts_with("!"))
             .and_then(|t| self.commands.get(t))
         {
-            return self.reply_to_parent(msg, &command.response);
+            return command(self, msg);
         }
 
-        self.reply(msg, "unknown")
-        // Err(Error::RustError("command not found".to_string()))
+        Response::empty()
     }
 }

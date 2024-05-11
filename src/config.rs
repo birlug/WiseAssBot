@@ -1,5 +1,6 @@
 use cidr::IpCidr;
 use serde::Deserialize;
+use telegram_types::bot::types::ChatId;
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -10,6 +11,7 @@ pub struct Config {
 #[derive(Deserialize)]
 pub struct BotConfig {
     pub admin_users_id: Vec<i64>,
+    pub report_chat_id: ChatId,
 }
 
 #[derive(Deserialize)]
@@ -23,32 +25,10 @@ mod tests {
 
     #[test]
     fn test_config() {
-        let config = r#"
-        [bot]
-        admin_users_id = [
-            7357
-        ]
-        mastodon_api_key = ""
-
-        [routes]
-        allowed_ip = [
-            "91.108.56.0/22",
-            "91.108.4.0/22",
-            "91.108.8.0/22",
-            "91.108.16.0/22",
-            "91.108.12.0/22",
-            "149.154.160.0/20",
-            "91.105.192.0/23",
-            "91.108.20.0/22",
-            "185.76.151.0/24",
-            "2001:b28:f23d::/48",
-            "2001:b28:f23f::/48",
-            "2001:67c:4e8::/48",
-            "2001:b28:f23c::/48",
-            "2a0a:f280::/32",
-        ]"#;
-
+        let config = include_str!("../config-example.toml");
         let result: Config = toml::from_str(config).unwrap();
+
         assert_eq!(result.bot.admin_users_id, [7357]);
+        assert_eq!(result.bot.report_chat_id, ChatId(7357));
     }
 }
