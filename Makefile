@@ -12,7 +12,7 @@ deploy: prepare ## deploy to cf workers
 
 .PHONY: config-upload
 config-upload: ## upload config to kv storage. "name" arg should be provided
-	@ npx wrangler secret put $(TOKEN)
+	@ echo $(TOKEN) | npx wrangler secret put TOKEN
 	@ npx wrangler kv:key put CONFIG --path=$(name) --namespace-id=$(KV_ID)
 
 .PHONY: prepare

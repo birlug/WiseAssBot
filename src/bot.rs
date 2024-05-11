@@ -1,78 +1,60 @@
-use std::borrow::Cow;
+use crate::config::Config;
 
-use worker::*;
-use serde::{Deserialize, Serialize};
-use telegram_types::bot::methods::{
-    ChatTarget, DeleteWebhook, GetMe, Method as TMethod, SendMessage, SetWebhook, TelegramResult,
-    UpdateTypes,
+use std::collections::HashMap;
+
+use serde::Serialize;
+use telegram_types::bot::{
+    methods::{ChatTarget, Method, SendMessage},
+    types::Message,
 };
-use telegram_types::bot::types::{Message, User};
+use worker::*;
 
 #[derive(Clone, Debug, Serialize)]
-pub struct WebhookReply<T: TMethod> {
+pub struct WebhookReply<M: Method> {
     pub method: String,
     #[serde(flatten)]
-    pub content: T,
+    pub content: M,
 }
 
-impl<T: TMethod> From<T> for WebhookReply<T> {
-    fn from(method: T) -> WebhookReply<T> {
+impl<M: Method> From<M> for WebhookReply<M> {
+    fn from(method: M) -> WebhookReply<M> {
         WebhookReply {
-            method: <T>::NAME.to_string(),
+            method: <M>::NAME.to_string(),
             content: method,
         }
     }
 }
 
-#[derive(Deserialize)]
-struct Config {
-    allowed_users_id: Vec<i64>,
+#[derive(Debug)]
+struct Command {
+    key: String,
+    response: String,
 }
 
 pub struct Bot {
-    pub token: String,
+    _token: String,
+    commands: HashMap<String, Command>,
     pub config: Config,
 }
 
 impl Bot {
-    pub fn new(token: String, config: String) -> Result<Self> {
+    pub fn new(_token: String, config: String) -> Result<Self> {
         let config: Config =
             toml::from_str(&config).map_err(|e| Error::RustError(e.to_string()))?;
 
-        Ok(Self { token, config })
+        Ok(Self {
+            _token,
+            config,
+            commands: HashMap::new(),
+        })
     }
 
-    async fn send_json_request<T: TMethod>(&self, _: T, method: Method) -> Result<Response> {
-        let mut request_builder = RequestInit::new();
-        request_builder.with_method(method);
-
-        Fetch::Request(Request::new_with_init(
-            &T::url(&self.token),
-            &request_builder,
-        )?)
-        .send()
-        .await
-    }
-
-    pub async fn get_me(&self) -> Result<User> {
-        let mut result = self.send_json_request(GetMe, Method::Get).await?;
-        result
-            .json::<TelegramResult<User>>()
-            .await?
-            .into_result()
-            .map_err(|e| Error::RustError(e.description))
-    }
-
-    pub async fn set_webhook(&self, url: String) -> Result<()> {
-        let payload = DeleteWebhook;
-        self.send_json_request(payload, Method::Post).await?;
-
-        let mut payload = SetWebhook::new(url);
-        // only allow message types
-        payload.allowed_updates = Some(Cow::from(&[UpdateTypes::Message]));
-        self.send_json_request(payload, Method::Post).await?;
-
-        Ok(())
+    pub fn add_command(&mut self, key: &str, response: &str) {
+        let cmd = Command {
+            key: key.to_string(),
+            response: response.to_string(),
+        };
+        self.commands.insert(key.to_string(), cmd);
     }
 
     pub fn reply(&self, msg: &Message, text: &str) -> Result<Response> {
@@ -81,8 +63,28 @@ impl Bot {
         ))
     }
 
+    pub fn reply_to_parent(&self, msg: &Message, text: &str) -> Result<Response> {
+        let mut msg = Message::from(msg.clone());
+
+        if let Some(replied) = &msg.reply_to_message {
+            msg.message_id = replied.message_id;
+        }
+
+        self.reply(&msg, text)
+    }
+
     pub fn process(&self, msg: &Message) -> Result<Response> {
-        let text = format!("{:?}", msg);
-        self.reply(msg, &text)
+        if let Some(command) = msg
+            .text
+            .as_ref()
+            .map(|t| t.trim())
+            .filter(|t| t.starts_with("!"))
+            .and_then(|t| self.commands.get(t))
+        {
+            return self.reply_to_parent(msg, &command.response);
+        }
+
+        self.reply(msg, "unknown")
+        // Err(Error::RustError("command not found".to_string()))
     }
 }

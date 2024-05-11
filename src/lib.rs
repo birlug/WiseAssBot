@@ -1,17 +1,22 @@
 mod bot;
+mod config;
+
+use std::net::IpAddr;
 
 use bot::Bot;
-use worker::*;
+use include_dir::{include_dir, Dir};
 use telegram_types::bot::types::{Update, UpdateContent};
+use worker::*;
 
 const TOKEN: &str = "TOKEN";
 const CONFIG: &str = "CONFIG";
 const BUCKET: &str = "BUCKET";
 
+static RESPONSE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/response");
+
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    let bucket = env.var(BUCKET)
-        .expect("BUCKET env variable can't be empty");
+    let bucket = env.var(BUCKET).expect("BUCKET env variable can't be empty");
     let kv = env.kv(&bucket.to_string())?;
 
     let token = env
@@ -25,27 +30,40 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .await?
         .expect("config is not provided");
 
-    let bot = Bot::new(token, config).expect("could not initialize the bot");
+    let mut bot = Bot::new(token, config).expect("could not initialize the bot");
 
-    // webhook
-    let router = Router::with_data(bot).get_async("/", |req, ctx| async move {
-        let ip = req.headers().get("cf-connecting-ip");
-        Response::ok(format!("ip: {:?}", ip))
+    // commands
+    RESPONSE_DIR.files().for_each(|f| {
+        let k = f.path().to_str().unwrap(); // safe to unwrap
+        let r = f.contents_utf8().unwrap(); // safe to unwrap
+        bot.add_command(&format!("!{}", k), &r);
     });
 
     // message handler
-    let router = router.post_async("/updates", |mut req, ctx| async move {
+    let router = Router::with_data(bot).post_async("/updates", |mut req, ctx| async move {
         let update = req.json::<Update>().await?;
 
         if let Some(UpdateContent::Message(m)) = update.content {
-            // reject other ips rather than telegram_types
-
             let bot = ctx.data;
-            if let Some(sender) = m.from.clone() {
-                // if bot.config.allowed_users_id.contains(&sender.id.0) {
-                return bot.process(&m);
-                // }
+
+            // reject ip addresses other than telegram
+            let ip = req
+                .headers()
+                .get("cf-connecting-ip")?
+                .map(|ip| ip.parse::<IpAddr>())
+                .unwrap() // safe to unwrap
+                .map_err(|e| Error::RustError(e.to_string()))?;
+            if !bot
+                .config
+                .routes
+                .allowed_ip
+                .iter()
+                .any(|cidr| cidr.contains(&ip))
+            {
+                return Response::empty();
             }
+
+            return bot.process(&m);
         }
 
         Response::empty()
