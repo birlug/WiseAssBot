@@ -1,6 +1,7 @@
 mod bot;
 mod commands;
 mod config;
+mod telegram;
 
 use std::net::IpAddr;
 
@@ -42,6 +43,8 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     });
     bot.commands
         .insert("!report".to_string(), Box::new(commands::report));
+    bot.commands
+        .insert("!share".to_string(), Box::new(commands::share));
 
     // message handler
     let router = Router::with_data(bot).post_async("/updates", |mut req, ctx| async move {
