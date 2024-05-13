@@ -29,7 +29,7 @@ mod tests {
         let config = include_str!("../config-example.toml");
         let result: Config = toml::from_str(config).unwrap();
 
-        assert_eq!(result.bot.admin_users_id, [7357]);
+        assert_eq!(result.bot.admin_users_id, [UserId(7357)]);
         assert_eq!(result.bot.report_chat_id, ChatId(7357));
     }
 }
