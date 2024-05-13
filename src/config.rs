@@ -1,6 +1,6 @@
 use cidr::IpCidr;
 use serde::Deserialize;
-use telegram_types::bot::types::ChatId;
+use telegram_types::bot::types::{ChatId, UserId};
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -10,8 +10,9 @@ pub struct Config {
 
 #[derive(Deserialize)]
 pub struct BotConfig {
-    pub admin_users_id: Vec<i64>,
+    pub admin_users_id: Vec<UserId>,
     pub report_chat_id: ChatId,
+    pub allowed_chats_id: Vec<ChatId>,
 }
 
 #[derive(Deserialize)]

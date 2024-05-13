@@ -30,3 +30,15 @@ impl Method for PinChatMessage {
     const NAME: &'static str = "pinChatMessage";
     type Item = Message;
 }
+
+#[derive(Clone, Serialize)]
+pub struct ForwardMessage {
+    pub chat_id: ChatId,
+    pub from_chat_id: ChatId,
+    pub message_id: MessageId,
+}
+
+impl Method for ForwardMessage {
+    const NAME: &'static str = "forwardMessage";
+    type Item = Message;
+}

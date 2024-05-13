@@ -1,11 +1,11 @@
 use crate::config::Config;
-use crate::telegram::{PinChatMessage, WebhookReply};
+use crate::telegram::{ForwardMessage, PinChatMessage, WebhookReply};
 
 use std::collections::HashMap;
 
 use telegram_types::bot::{
     methods::{ChatTarget, SendMessage},
-    types::{ChatId, Message, MessageId, ParseMode},
+    types::{ChatId, Message, ParseMode},
 };
 use worker::*;
 
@@ -64,15 +64,33 @@ impl Bot {
         }))
     }
 
+    pub fn forward(&self, msg: &Message, chat_id: ChatId) -> Result<Response> {
+        let from_chat_id = msg.chat.id;
+        let message_id = msg.message_id;
+
+        Response::from_json(&WebhookReply::from(ForwardMessage {
+            chat_id,
+            from_chat_id,
+            message_id,
+        }))
+    }
+
     pub async fn process(&self, msg: &Message) -> Result<Response> {
-        if let Some(command) = msg
-            .text
-            .as_ref()
-            .map(|t| t.trim())
-            .filter(|t| t.starts_with("!"))
-            .and_then(|t| self.commands.get(t))
-        {
-            return command(self, msg);
+        if !self.config.bot.allowed_chats_id.contains(&msg.chat.id) {
+            // report unallowed chats
+            return self.forward(msg, self.config.bot.report_chat_id);
+        }
+
+        if self.config.bot.allowed_chats_id.contains(&msg.chat.id) {
+            if let Some(command) = msg
+                .text
+                .as_ref()
+                .map(|t| t.trim())
+                .filter(|t| t.starts_with("!"))
+                .and_then(|t| self.commands.get(t))
+            {
+                return command(self, msg);
+            }
         }
 
         Response::empty()
