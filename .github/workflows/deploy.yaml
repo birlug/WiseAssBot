@@ -1,13 +1,7 @@
-name: CI/CD
+name: Deploy
 
 on:
   push:
-    branches:
-      - main
-    paths-ignore:
-      - 'README.md'
-      - 'LICENSE.md'
-  pull_request:
     branches:
       - main
     paths-ignore:
@@ -18,13 +12,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - name: running tests
-      run: cargo test --verbose
-
   deploy:
     runs-on: ubuntu-latest
     environment: wiseass
