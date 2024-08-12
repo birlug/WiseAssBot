@@ -1,4 +1,5 @@
 mod bot;
+mod challenge;
 mod commands;
 mod config;
 mod telegram;
@@ -7,7 +8,7 @@ use std::net::IpAddr;
 
 use bot::Bot;
 use include_dir::{include_dir, Dir};
-use telegram_types::bot::types::{Update, UpdateContent};
+use telegram_types::bot::types::Update;
 use worker::*;
 
 const TOKEN: &str = "TOKEN";
@@ -48,27 +49,24 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
     // message handler
     let router = Router::with_data(bot).post_async("/updates", |mut req, ctx| async move {
-        let update = req.json::<Update>().await?;
+        let bot = ctx.data;
 
-        if let Some(UpdateContent::Message(m)) = update.content {
-            let bot = ctx.data;
-
-            // reject ip addresses other than telegram
-            let ip = req
-                .headers()
-                .get("cf-connecting-ip")?
-                .map(|ip| ip.parse::<IpAddr>())
-                .unwrap() // safe to unwrap
-                .map_err(|e| Error::RustError(e.to_string()))?;
-            if bot
-                .config
-                .routes
-                .allowed_ip
-                .iter()
-                .any(|cidr| cidr.contains(&ip))
-            {
-                return bot.process(&m).await;
-            }
+        // reject ip addresses other than telegram
+        let ip = req
+            .headers()
+            .get("cf-connecting-ip")?
+            .map(|ip| ip.parse::<IpAddr>())
+            .unwrap() // safe to unwrap
+            .map_err(|e| Error::RustError(e.to_string()))?;
+        if bot
+            .config
+            .routes
+            .allowed_ip
+            .iter()
+            .any(|cidr| cidr.contains(&ip))
+        {
+            let update = req.json::<Update>().await?;
+            return bot.process(&update).await;
         }
 
         Response::empty()
