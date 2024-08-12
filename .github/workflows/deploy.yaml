@@ -15,7 +15,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: wiseass
-    needs: test
     if: github.ref == 'refs/heads/main'
     steps:
     - uses: actions/checkout@v3
