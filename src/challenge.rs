@@ -29,10 +29,14 @@ impl Quiz {
     pub fn choices(&self) -> Vec<String> {
         let mut rng = rand::thread_rng();
 
-        let mut opts = (0..3)
-            .map(|_| rng.gen_range(0..40).to_string())
-            .collect::<Vec<String>>();
-        opts.push(self.answer().to_string());
+        let mut opts: Vec<u16> = (0..40).filter(|&x| x != self.answer()).collect();
+        opts.shuffle(&mut rng);
+
+        let mut opts: Vec<String> = [&opts[..3], &[self.answer()]]
+            .concat()
+            .into_iter()
+            .map(|x| x.to_string())
+            .collect();
         opts.shuffle(&mut rng);
 
         opts
@@ -44,5 +48,24 @@ impl Quiz {
             number_to_words(self.num1 as _).unwrap(),
             number_to_words(self.num2 as _).unwrap()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_quiz_choices_contains_answer() {
+        let quiz = Quiz::new();
+        assert!(quiz.choices().contains(&quiz.answer().to_string()));
+    }
+
+    #[test]
+    fn test_quiz_choices_unique() {
+        let quiz = Quiz::new();
+        let unique = HashSet::<_>::from_iter(quiz.choices().into_iter());
+        assert_eq!(unique.len(), 4);
     }
 }
