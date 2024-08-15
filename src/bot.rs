@@ -6,11 +6,12 @@ use std::collections::HashMap;
 
 use telegram_types::bot::{
     methods::{
-        ApproveJoinRequest, ChatTarget, DeclineJoinRequest, DeleteMessage, ReplyMarkup, SendMessage,
+        ApproveJoinRequest, ChatTarget, DeclineJoinRequest, DeleteMessage, ReplyMarkup,
+        SendMessage, TelegramResult,
     },
     types::{
         ChatId, InlineKeyboardButton, InlineKeyboardButtonPressed, InlineKeyboardMarkup, Message,
-        MessageEntity, ParseMode, Update, UpdateContent, User, UserId,
+        ParseMode, Update, UpdateContent, User, UserId,
     },
 };
 use worker::*;
@@ -19,17 +20,19 @@ type FnCmd = dyn Fn(&Bot, &Message) -> Result<Response>;
 
 pub struct Bot {
     _token: String,
+    kv: kv::KvStore,
     pub commands: HashMap<String, Box<FnCmd>>,
     pub config: Config,
 }
 
 impl Bot {
-    pub fn new(_token: String, config: String) -> Result<Self> {
+    pub fn new(_token: String, config: String, kv: kv::KvStore) -> Result<Self> {
         let config: Config =
             toml::from_str(&config).map_err(|e| Error::RustError(e.to_string()))?;
 
         Ok(Self {
             _token,
+            kv,
             config,
             commands: HashMap::new(),
         })
@@ -95,11 +98,11 @@ impl Bot {
         }))
     }
 
-    fn chat_join_request(&self, user: &User, chat_id: ChatId) -> Result<Response> {
+    async fn chat_join_request(&self, user: &User, chat_id: ChatId) -> Result<Response> {
         let user_mention = format!("[{}](tg://user?id={})", user.first_name, user.id.0);
 
         let quiz = Quiz::new();
-        let message = format!(include_str!("./response/join"), user_mention, quiz.encode(),);
+        let message = format!(include_str!("./response/join"), user_mention, quiz.encode());
 
         let keys = quiz
             .choices()
@@ -110,13 +113,31 @@ impl Bot {
             })
             .collect::<Vec<InlineKeyboardButton>>();
 
-        Response::from_json(&WebhookReply::from(
+        let response: TelegramResult<Message> = telegram::send_json_request(
+            &self._token,
             SendMessage::new(ChatTarget::Id(chat_id), message)
                 .parse_mode(ParseMode::Markdown)
                 .reply_markup(ReplyMarkup::InlineKeyboard(InlineKeyboardMarkup {
                     inline_keyboard: vec![keys],
                 })),
-        ))
+        )
+        .await?
+        .json()
+        .await?;
+
+        let message_id = response
+            .result
+            .ok_or("response result empty".to_string())
+            .map_err(|e| Error::RustError(e))?
+            .message_id;
+        let _ = self
+            .kv
+            .put(&format!("{}:{}", chat_id.0, message_id.0), user.id.0)?
+            .expiration_ttl(5 * 60) // FIXME: configurable expiration ttl
+            .execute()
+            .await?;
+
+        Response::empty()
     }
 
     pub async fn process(&self, update: &Update) -> Result<Response> {
@@ -140,12 +161,17 @@ impl Bot {
                 if !self.config.bot.allowed_chats_id.contains(&r.chat.id) {
                     return Response::empty();
                 }
-                return self.chat_join_request(&r.from, r.chat.id);
+                return self.chat_join_request(&r.from, r.chat.id).await;
             }
             Some(UpdateContent::CallbackQuery(q)) => {
                 // ignore callbacks without an associated message
                 if let Some(msg) = &q.message {
-                    if extract_tg_id(&msg.entities) == q.from.id {
+                    let key = format!("{}:{}", msg.chat.id.0, msg.message_id.0);
+
+                    let assigned_user = self.kv.get(&key).text().await?.unwrap_or_default();
+                    let answered_user = q.from.id.0.to_string();
+
+                    if assigned_user == answered_user {
                         if let Some(text) = &msg.text {
                             let quiz = Quiz::from_str(&extract_question(&text));
                             let answer = &quiz.answer().to_string();
@@ -158,6 +184,7 @@ impl Bot {
                                 },
                             )
                             .await;
+                            self.kv.delete(&key).await?; // TODO: remove stale keys within an interval
 
                             return if q.data.as_ref().map(|x| x == answer).unwrap_or_default() {
                                 self.approve_join_request(msg.chat.id, q.from.id)
@@ -173,16 +200,6 @@ impl Bot {
 
         Response::empty()
     }
-}
-
-fn extract_tg_id(entities: &Vec<MessageEntity>) -> UserId {
-    if !entities.is_empty() {
-        if let Some(user) = &entities[0].user {
-            return user.id;
-        }
-    }
-    // this case should never happen
-    UserId(0)
 }
 
 fn extract_question(text: &str) -> String {
