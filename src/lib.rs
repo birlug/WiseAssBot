@@ -33,7 +33,7 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .await?
         .expect("config is not provided");
 
-    let mut bot = Bot::new(token, config).expect("could not initialize the bot");
+    let mut bot = Bot::new(token, config, kv).expect("could not initialize the bot");
 
     // commands
     RESPONSE_DIR.files().for_each(|f| {
