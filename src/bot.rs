@@ -4,6 +4,7 @@ use crate::telegram::{self, ForwardMessage, PinChatMessage, WebhookReply};
 
 use std::collections::HashMap;
 
+use rust_persian_tools::digits::DigitsEn2Fa;
 use telegram_types::bot::{
     methods::{
         ApproveJoinRequest, ChatTarget, DeclineJoinRequest, DeleteMessage, ReplyMarkup,
@@ -146,6 +147,14 @@ impl Bot {
                 if !self.config.bot.allowed_chats_id.contains(&m.chat.id) {
                     // report unallowed chats
                     return self.forward(&m, self.config.bot.report_chat_id);
+                }
+                // easter egg: appreciate powers of two!
+                if m.message_id.0 & (m.message_id.0 - 1) == 0 {
+                    let reply = format!(
+                        include_str!("./response/easter-egg"),
+                        m.message_id.0.digits_en_to_fa()
+                    );
+                    return self.reply(m, &reply);
                 }
                 if let Some(command) = m
                     .text
