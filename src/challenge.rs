@@ -68,4 +68,16 @@ mod tests {
         let unique = HashSet::<_>::from_iter(quiz.choices().into_iter());
         assert_eq!(unique.len(), 4);
     }
+
+    #[test]
+    fn test_quiz_from_str() {
+        let quiz = Quiz::from_str("1 + 1");
+        assert_eq!(quiz.answer(), 2);
+    }
+
+    #[test]
+    fn test_quiz_encode() {
+        let quiz = Quiz::from_str("1 + 2");
+        assert_eq!(quiz.encode(), "یک + دو".to_string());
+    }
 }
