@@ -36,11 +36,14 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let mut bot = Bot::new(token, config, kv).expect("could not initialize the bot");
 
     // commands
+    let ignored_commands = ["report", "join", "easter-egg"];
     RESPONSE_DIR.files().for_each(|f| {
         let k = f.path().to_str().unwrap(); // safe to unwrap
         let r = f.contents_utf8().unwrap(); // safe to unwrap
-        bot.commands
-            .insert(format!("!{}", k), Box::new(|b, m| b.reply(m, r)));
+        if !ignored_commands.contains(&k) {
+            bot.commands
+                .insert(format!("!{}", k), Box::new(|b, m| b.reply(m, r)));
+        }
     });
     bot.commands
         .insert("!report".to_string(), Box::new(commands::report));
