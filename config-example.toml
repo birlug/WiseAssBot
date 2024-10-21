@@ -7,6 +7,12 @@ allowed_chats_id = []
 report_chat_id = 7357
 mastodon_api_key = ""
 
+[[bot.rules]]
+action = "block"
+contains = [
+    "bad word",
+]
+
 [routes]
 # whitelisted ip addresses to access the routes
 allowed_ip = [

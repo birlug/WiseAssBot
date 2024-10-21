@@ -688,7 +688,7 @@ dependencies = [
 [[package]]
 name = "telegram_types"
 version = "0.6.0"
-source = "git+https://github.com/birlug/telegram-types#416cc1638809f3e946d6d0bf1f363756a2fdc1f0"
+source = "git+https://github.com/birlug/telegram-types#35cd1dd3af7cdf731446fee6aed58dbb42389b74"
 dependencies = [
  "serde",
  "serde_derive",
