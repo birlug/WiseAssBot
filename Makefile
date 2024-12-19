@@ -18,3 +18,11 @@ config-upload: ## upload config to kv storage. "name" arg should be provided
 .PHONY: prepare
 prepare: ## prepare developing environment
 	@ sed -i -e "s/KV_BINDING/$(KV_BINDING)/" -e "s/KV_ID/$(KV_ID)/" wrangler.toml
+
+.PHONY: dev-config
+dev-config: ## write config locally
+	@ npx wrangler kv:key put CONFIG --path=$(name) --binding $(KV_BINDING) --local
+
+.PHONY: dev
+dev: prepare ## run the project locally
+	@ npx wrangler dev  --port 8780 --var BUCKET:$(KV_BINDING) TOKEN:$(TOKEN)

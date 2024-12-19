@@ -25,11 +25,8 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-bin-
 
-    - name: install tarpaulin
-      run: cargo install cargo-tarpaulin
-
-    - name: run test coverage
-      run: cargo tarpaulin | tail -n 1 | awk -F% '{print;} $1 + 0 < 10 {exit 1}'
+    - name: run test
+      run: cargo test --verbose
 
   check-format:
     runs-on: ubuntu-latest

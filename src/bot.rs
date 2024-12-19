@@ -1,5 +1,5 @@
 use crate::challenge::Quiz;
-use crate::config::Config;
+use crate::config::{Action, Config};
 use crate::telegram::{self, ForwardMessage, PinChatMessage, WebhookReply};
 
 use std::collections::HashMap;
@@ -8,11 +8,11 @@ use rust_persian_tools::digits::DigitsEn2Fa;
 use telegram_types::bot::{
     methods::{
         ApproveJoinRequest, ChatTarget, DeclineJoinRequest, DeleteMessage, ReplyMarkup,
-        SendMessage, TelegramResult,
+        RestrictChatMember, SendMessage, TelegramResult,
     },
     types::{
-        ChatId, InlineKeyboardButton, InlineKeyboardButtonPressed, InlineKeyboardMarkup, Message,
-        ParseMode, Update, UpdateContent, User, UserId,
+        ChatId, ChatPermissions, InlineKeyboardButton, InlineKeyboardButtonPressed,
+        InlineKeyboardMarkup, Message, ParseMode, Update, UpdateContent, User, UserId,
     },
 };
 use worker::*;
@@ -141,12 +141,45 @@ impl Bot {
         Response::empty()
     }
 
+    async fn restrict_user(&self, user: &User, chat_id: ChatId) {
+        let _ = telegram::send_json_request(
+            &self._token,
+            RestrictChatMember {
+                chat_id: ChatTarget::Id(chat_id),
+                user_id: user.id,
+                permissions: ChatPermissions {
+                    can_send_messages: false,
+                },
+            },
+        )
+        .await;
+    }
+
     pub async fn process(&self, update: &Update) -> Result<Response> {
         match &update.content {
             Some(UpdateContent::Message(m)) => {
                 if !self.config.bot.allowed_chats_id.contains(&m.chat.id) {
                     // report unallowed chats
                     return self.forward(&m, self.config.bot.report_chat_id);
+                }
+                // rules
+                for rule in &self.config.bot.rules {
+                    for word in &rule.contains {
+                        if m.text
+                            .as_ref()
+                            .map(|t| t.contains(word))
+                            .unwrap_or_default()
+                        {
+                            match rule.action {
+                                Action::Block => {
+                                    if let Some(u) = &m.from {
+                                        self.restrict_user(&u, m.chat.id).await;
+                                    }
+                                }
+                            }
+                            return self.forward(&m, self.config.bot.report_chat_id);
+                        }
+                    }
                 }
                 // easter egg: appreciate powers of two!
                 if m.message_id.0 & (m.message_id.0 - 1) == 0 {
