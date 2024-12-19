@@ -16,6 +16,7 @@ use telegram_types::bot::{
     },
 };
 use worker::*;
+use tokio::time;
 
 type FnCmd = dyn Fn(&Bot, &Message) -> Result<Response>;
 
