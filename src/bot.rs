@@ -3,6 +3,7 @@ use crate::config::{Action, Config};
 use crate::telegram::{self, ForwardMessage, PinChatMessage, WebhookReply};
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use rust_persian_tools::digits::DigitsEn2Fa;
 use telegram_types::bot::{
@@ -16,7 +17,6 @@ use telegram_types::bot::{
     },
 };
 use worker::*;
-use tokio::time;
 
 type FnCmd = dyn Fn(&Bot, &Message) -> Result<Response>;
 
@@ -157,10 +157,10 @@ impl Bot {
     }
 
     async fn cleanup_old_quizzes(&self) -> Result<()> {
-        let keys: Vec<String> = self.kv.list().execute().await?.keys;
+        let keys: Vec<String> = self.kv.list().execute().await?.keys.iter().map(|k| k.name.clone()).collect();
 
         for key in keys {
-            let is_expired = self.kv.get(&key).metadata().await?.is_none();
+            let is_expired = self.kv.get(&key).execute().await?.is_none();
 
             if is_expired {
                 let _ = self.kv.delete(&key).await;
@@ -170,7 +170,7 @@ impl Bot {
     }
 
     pub async fn start_cleanup_task(&self, interval: u64) {
-        let self_clone = self.clone();
+        let self_clone = Arc::new(self.clone());
         tokio::spawn(async move {
             let duration = std::time::Duration::from_secs(interval);
             loop {
