@@ -134,7 +134,7 @@ impl Bot {
         let _ = self
             .kv
             .put(&format!("{}:{}", chat_id.0, message_id.0), user.id.0)?
-            .expiration_ttl(5 * 60) // FIXME: configurable expiration ttl
+            .expiration_ttl(5 * 60)
             .execute()
             .await?;
 
@@ -155,14 +155,36 @@ impl Bot {
         .await;
     }
 
+    async fn cleanup_old_quizzes(&self) -> Result<()> {
+        let keys: Vec<String> = self.kv.list().execute().await?.keys;
+
+        for key in keys {
+            let is_expired = self.kv.get(&key).metadata().await?.is_none();
+
+            if is_expired {
+                let _ = self.kv.delete(&key).await;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn start_cleanup_task(&self, interval: u64) {
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            let duration = std::time::Duration::from_secs(interval);
+            loop {
+                tokio::time::sleep(duration).await;
+                let _ = self_clone.cleanup_old_quizzes().await;
+            }
+        });
+    }
+
     pub async fn process(&self, update: &Update) -> Result<Response> {
         match &update.content {
             Some(UpdateContent::Message(m)) => {
                 if !self.config.bot.allowed_chats_id.contains(&m.chat.id) {
-                    // report unallowed chats
                     return self.forward(&m, self.config.bot.report_chat_id);
                 }
-                // rules
                 for rule in &self.config.bot.rules {
                     for word in &rule.contains {
                         if m.text
@@ -181,7 +203,6 @@ impl Bot {
                         }
                     }
                 }
-                // easter egg: appreciate powers of two!
                 if m.message_id.0 & (m.message_id.0 - 1) == 0 {
                     let reply = format!(
                         include_str!("./response/easter-egg"),
@@ -206,7 +227,6 @@ impl Bot {
                 return self.chat_join_request(&r.from, r.chat.id).await;
             }
             Some(UpdateContent::CallbackQuery(q)) => {
-                // ignore callbacks without an associated message
                 if let Some(msg) = &q.message {
                     let key = format!("{}:{}", msg.chat.id.0, msg.message_id.0);
 
@@ -226,7 +246,7 @@ impl Bot {
                                 },
                             )
                             .await;
-                            self.kv.delete(&key).await?; // TODO: remove stale keys within an interval
+                            self.kv.delete(&key).await?;
 
                             return if q.data.as_ref().map(|x| x == answer).unwrap_or_default() {
                                 self.approve_join_request(msg.chat.id, q.from.id)
@@ -246,6 +266,5 @@ impl Bot {
 
 fn extract_question(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
-    // currently the last line contains the question
     lines[lines.len() - 1].to_string()
 }
