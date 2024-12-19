@@ -160,7 +160,7 @@ impl Bot {
         let keys: Vec<String> = self.kv.list().execute().await?.keys.iter().map(|k| k.name.clone()).collect();
 
         for key in keys {
-            let is_expired = self.kv.get(&key).execute().await?.is_none();
+            let is_expired = self.kv.get(&key).text().await?.is_none();
 
             if is_expired {
                 let _ = self.kv.delete(&key).await;
@@ -171,11 +171,14 @@ impl Bot {
 
     pub async fn start_cleanup_task(&self, interval: u64) {
         let self_clone = Arc::new(self.clone());
-        tokio::spawn(async move {
-            let duration = std::time::Duration::from_secs(interval);
-            loop {
-                tokio::time::sleep(duration).await;
-                let _ = self_clone.cleanup_old_quizzes().await;
+        tokio::spawn({
+            let self_clone = Arc::clone(&self_clone);
+            async move {
+                let duration = std::time::Duration::from_secs(interval);
+                loop {
+                    tokio::time::sleep(duration).await;
+                    let _ = self_clone.cleanup_old_quizzes().await;
+                }
             }
         });
     }
