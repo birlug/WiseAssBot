@@ -12,11 +12,12 @@ use telegram_types::bot::{
     },
     types::{
         ChatId, ChatPermissions, InlineKeyboardButton, InlineKeyboardButtonPressed,
-        InlineKeyboardMarkup, Message, ParseMode, Update, UpdateContent, User, UserId,
+        InlineKeyboardMarkup, Message, MessageId, ParseMode, Update, UpdateContent, User, UserId,
     },
 };
 use worker::*;
 
+const JOIN_PREFIX: &str = "_JOIN_";
 type FnCmd = dyn Fn(&Bot, &Message) -> Result<Response>;
 
 pub struct Bot {
@@ -99,6 +100,39 @@ impl Bot {
         }))
     }
 
+    pub async fn remove_expired_join_requests(&self) -> Result<()> {
+        const TTL_LIMIT: u64 = 7 * 60;
+
+        let keys = self
+            .kv
+            .list()
+            .prefix(JOIN_PREFIX.to_string())
+            .execute()
+            .await?
+            .keys;
+
+        for key in keys {
+            // TODO: join requests without expiration date are invalid
+            if let Some(ttl) = key.expiration {
+                let now = Date::now().as_millis() / 1000;
+                if ttl - now < TTL_LIMIT {
+                    let (chat_id, message_id) = extract_key_details(&key.name);
+                    let _ = telegram::send_json_request(
+                        &self._token,
+                        DeleteMessage {
+                            chat_id: ChatTarget::Id(chat_id),
+                            message_id,
+                        },
+                    )
+                    .await;
+                    // the key will be removed automatically after being expired
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     async fn chat_join_request(&self, user: &User, chat_id: ChatId) -> Result<Response> {
         let user_mention = format!("[{}](tg://user?id={})", user.first_name, user.id.0);
 
@@ -133,8 +167,11 @@ impl Bot {
             .message_id;
         let _ = self
             .kv
-            .put(&format!("{}:{}", chat_id.0, message_id.0), user.id.0)?
-            .expiration_ttl(5 * 60) // FIXME: configurable expiration ttl
+            .put(
+                &format!("{}{}:{}", JOIN_PREFIX, chat_id.0, message_id.0),
+                user.id.0,
+            )?
+            .expiration_ttl(10 * 60) // FIXME: configurable expiration ttl
             .execute()
             .await?;
 
@@ -208,7 +245,7 @@ impl Bot {
             Some(UpdateContent::CallbackQuery(q)) => {
                 // ignore callbacks without an associated message
                 if let Some(msg) = &q.message {
-                    let key = format!("{}:{}", msg.chat.id.0, msg.message_id.0);
+                    let key = format!("{}{}:{}", JOIN_PREFIX, msg.chat.id.0, msg.message_id.0);
 
                     let assigned_user = self.kv.get(&key).text().await?.unwrap_or_default();
                     let answered_user = q.from.id.0.to_string();
@@ -248,4 +285,44 @@ fn extract_question(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     // currently the last line contains the question
     lines[lines.len() - 1].to_string()
+}
+
+fn extract_key_details(text: &str) -> (ChatId, MessageId) {
+    let mut chat_id = 0;
+    let mut message_id = 0;
+
+    let info = text.strip_prefix(JOIN_PREFIX).unwrap(); // safe to unwrap
+    let info = info
+        .split(':')
+        .map(|x| x.parse().unwrap_or_default())
+        .collect::<Vec<i64>>();
+
+    if info.len() == 2 {
+        chat_id = info[0];
+        message_id = info[1];
+    }
+
+    (ChatId(chat_id), MessageId(message_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_question() {
+        let question = extract_question("first line\nsecond line\nthird line");
+        assert_eq!(question, "third line");
+    }
+
+    #[test]
+    fn test_extract_key_details() {
+        let (chat_id, message_id) = extract_key_details(&format!("{}{}:{}", JOIN_PREFIX, 123, 456));
+        assert_eq!(chat_id.0, 123);
+        assert_eq!(message_id.0, 456);
+
+        let (chat_id, message_id) = extract_key_details(&format!("{}{}-", JOIN_PREFIX, 123));
+        assert_eq!(chat_id.0, 0);
+        assert_eq!(message_id.0, 0);
+    }
 }

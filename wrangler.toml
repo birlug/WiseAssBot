@@ -8,3 +8,6 @@ kv_namespaces = [
 
 [build]
 command = "cargo install -q worker-build && worker-build --release"
+
+[triggers]
+crons = [ "*/3 * * * *" ]

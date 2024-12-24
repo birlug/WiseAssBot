@@ -19,21 +19,7 @@ static RESPONSE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/response");
 
 #[event(fetch)]
 async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    let bucket = env.var(BUCKET).expect("BUCKET env variable can't be empty");
-    let kv = env.kv(&bucket.to_string())?;
-
-    let token = env
-        .secret(TOKEN)
-        // should panic in case no token is provided
-        .expect("TOKEN env variable can't be empty")
-        .to_string();
-    let config = kv
-        .get(CONFIG)
-        .text()
-        .await?
-        .expect("config is not provided");
-
-    let mut bot = Bot::new(token, config, kv).expect("could not initialize the bot");
+    let mut bot = init_bot(&env).await.expect("could not initialize the bot");
 
     // commands
     let ignored_commands = ["report", "join", "easter-egg"];
@@ -76,4 +62,29 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     });
 
     router.run(req, env).await
+}
+
+#[event(scheduled)]
+async fn remove_join_messages(_ev: ScheduledEvent, env: Env, _: ScheduleContext) {
+    if let Ok(bot) = init_bot(&env).await {
+        let _ = bot.remove_expired_join_requests().await;
+    }
+}
+
+async fn init_bot(env: &Env) -> Result<Bot> {
+    let bucket = env.var(BUCKET).expect("BUCKET env variable can't be empty");
+    let kv = env.kv(&bucket.to_string())?;
+
+    let token = env
+        .secret(TOKEN)
+        // should panic in case no token is provided
+        .expect("TOKEN env variable can't be empty")
+        .to_string();
+    let config = kv
+        .get(CONFIG)
+        .text()
+        .await?
+        .expect("config is not provided");
+
+    Bot::new(token, config, kv)
 }
