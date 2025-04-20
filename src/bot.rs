@@ -4,7 +4,11 @@ use crate::telegram::{self, ForwardMessage, PinChatMessage, WebhookReply};
 
 use std::collections::HashMap;
 
-use rust_persian_tools::digits::DigitsEn2Fa;
+use rust_persian_tools::{
+    persian_chars::HasPersian,
+    arabic_chars::HasArabic,
+    digits::DigitsEn2Fa,
+};
 use telegram_types::bot::{
     methods::{
         ApproveJoinRequest, ChatTarget, DeclineJoinRequest, DeleteMessage, ReplyMarkup,
@@ -238,6 +242,11 @@ impl Bot {
             }
             Some(UpdateContent::ChatJoinRequest(r)) => {
                 if !self.config.bot.allowed_chats_id.contains(&r.chat.id) {
+                    return Response::empty();
+                }
+                // hotfix: ignore persian names for now
+                // as targeted spam users mostly have a name containing persian chars
+                if r.from.first_name.has_persian(true) || r.from.first_name.has_arabic() {
                     return Response::empty();
                 }
                 return self.chat_join_request(&r.from, r.chat.id).await;
