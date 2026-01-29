@@ -1,6 +1,6 @@
 use crate::challenge::Quiz;
 use crate::config::{Action, Config};
-use crate::telegram::{self, ForwardMessage, PinChatMessage, WebhookReply};
+use crate::telegram::{self, ForwardMessage, GetChatMember, PinChatMessage, WebhookReply};
 
 use std::collections::HashMap;
 
@@ -11,18 +11,29 @@ use rust_persian_tools::{
 };
 use telegram_types::bot::{
     methods::{
-        ApproveJoinRequest, ChatTarget, DeclineJoinRequest, DeleteMessage, ReplyMarkup,
-        RestrictChatMember, SendMessage, TelegramResult,
+        AnswerCallbackQuery, ApproveJoinRequest, ChatTarget, DeclineJoinRequest, DeleteMessage,
+        ReplyMarkup, RestrictChatMember, SendMessage, TelegramResult,
     },
     types::{
-        ChatId, ChatPermissions, InlineKeyboardButton, InlineKeyboardButtonPressed,
-        InlineKeyboardMarkup, Message, MessageId, ParseMode, Update, UpdateContent, User, UserId,
+        ChatId, ChatMember, ChatMemberStatus, ChatPermissions, InlineKeyboardButton,
+        InlineKeyboardButtonPressed, InlineKeyboardMarkup, Message, MessageId, ParseMode, Update,
+        UpdateContent, User, UserId,
     },
 };
 use worker::*;
 
 const JOIN_PREFIX: &str = "_JOIN_";
+const REPORT_PREFIX: &str = "_REPORT_";
 type FnCmd = dyn Fn(&Bot, &Message) -> Result<Response>;
+
+/// Entry stored in KV for each reported user, designed for future data export
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct ReportEntry {
+    pub user_id: i64,
+    pub group_id: i64,
+    pub reported_by: i64,
+    pub timestamp: u64,
+}
 
 pub struct Bot {
     _token: String,
@@ -152,12 +163,18 @@ impl Bot {
             })
             .collect::<Vec<InlineKeyboardButton>>();
 
+        // Report button for admins (callback data: "report:{user_id}")
+        let report_button = InlineKeyboardButton {
+            text: "🚨 Report".to_string(),
+            pressed: InlineKeyboardButtonPressed::CallbackData(format!("report:{}", user.id.0)),
+        };
+
         let response: TelegramResult<Message> = telegram::send_json_request(
             &self._token,
             SendMessage::new(ChatTarget::Id(chat_id), message)
                 .parse_mode(ParseMode::Markdown)
                 .reply_markup(ReplyMarkup::InlineKeyboard(InlineKeyboardMarkup {
-                    inline_keyboard: vec![keys],
+                    inline_keyboard: vec![keys, vec![report_button]],
                 })),
         )
         .await?
@@ -254,6 +271,76 @@ impl Bot {
             Some(UpdateContent::CallbackQuery(q)) => {
                 // ignore callbacks without an associated message
                 if let Some(msg) = &q.message {
+                    // Handle report button callback
+                    if let Some(data) = &q.data {
+                        if let Some(reported_user_id) = data.strip_prefix("report:") {
+                            // Verify the user clicking is an admin
+                            let member_response: TelegramResult<ChatMember> =
+                                telegram::send_json_request(
+                                    &self._token,
+                                    GetChatMember {
+                                        chat_id: ChatTarget::Id(msg.chat.id),
+                                        user_id: q.from.id,
+                                    },
+                                )
+                                .await?
+                                .json()
+                                .await?;
+
+                            if let Some(member) = member_response.result {
+                                let is_admin = matches!(
+                                    member.status,
+                                    ChatMemberStatus::Creator | ChatMemberStatus::Administrator
+                                );
+
+                                if is_admin {
+                                    // Store the report in KV
+                                    if let Ok(user_id) = reported_user_id.parse::<i64>() {
+                                        let report = ReportEntry {
+                                            user_id,
+                                            group_id: msg.chat.id.0,
+                                            reported_by: q.from.id.0,
+                                            timestamp: Date::now().as_millis() / 1000,
+                                        };
+                                        let report_key =
+                                            format!("{}{}", REPORT_PREFIX, user_id);
+                                        let report_json = serde_json::to_string(&report)
+                                            .unwrap_or_default();
+                                        let _ = self.kv.put(&report_key, report_json)?.execute().await;
+
+                                        // Acknowledge the callback
+                                        let _ = telegram::send_json_request(
+                                            &self._token,
+                                            AnswerCallbackQuery {
+                                                callback_query_id: q.id.clone(),
+                                                text: Some("✅ User reported successfully!".to_string()),
+                                                show_alert: Some(true),
+                                                url: None,
+                                                cache_time: None,
+                                            },
+                                        )
+                                        .await;
+                                    }
+                                } else {
+                                    // Non-admin tried to report
+                                    let _ = telegram::send_json_request(
+                                        &self._token,
+                                        AnswerCallbackQuery {
+                                            callback_query_id: q.id.clone(),
+                                            text: Some("⚠️ Only admins can report users.".to_string()),
+                                            show_alert: Some(true),
+                                            url: None,
+                                            cache_time: None,
+                                        },
+                                    )
+                                    .await;
+                                }
+                            }
+                            return Response::empty();
+                        }
+                    }
+
+                    // Handle quiz answer callback (existing logic)
                     let key = format!("{}{}:{}", JOIN_PREFIX, msg.chat.id.0, msg.message_id.0);
 
                     let assigned_user = self.kv.get(&key).text().await?.unwrap_or_default();
@@ -272,7 +359,7 @@ impl Bot {
                                 },
                             )
                             .await;
-                            self.kv.delete(&key).await?; // TODO: remove stale keys within an interval
+                            self.kv.delete(&key).await?;
 
                             return if q.data.as_ref().map(|x| x == answer).unwrap_or_default() {
                                 self.approve_join_request(msg.chat.id, q.from.id)
