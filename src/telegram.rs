@@ -1,7 +1,7 @@
 use serde::Serialize;
 use telegram_types::bot::{
-    methods::Method,
-    types::{ChatId, Message, MessageId},
+    methods::{ChatTarget, Method},
+    types::{ChatId, ChatMember, Message, MessageId, UserId},
 };
 use worker::{Error, Fetch, Headers, Request, RequestInit, Response, Result};
 
@@ -42,6 +42,17 @@ pub struct ForwardMessage {
 impl Method for ForwardMessage {
     const NAME: &'static str = "forwardMessage";
     type Item = Message;
+}
+
+#[derive(Clone, Serialize)]
+pub struct GetChatMember<'a> {
+    pub chat_id: ChatTarget<'a>,
+    pub user_id: UserId,
+}
+
+impl<'a> Method for GetChatMember<'a> {
+    const NAME: &'static str = "getChatMember";
+    type Item = ChatMember;
 }
 
 pub async fn send_json_request<T: Method>(token: &str, request: T) -> Result<Response> {
