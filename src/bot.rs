@@ -4,25 +4,32 @@ use crate::telegram::{self, ForwardMessage, PinChatMessage, WebhookReply};
 
 use std::collections::HashMap;
 
-use rust_persian_tools::{
-    persian_chars::HasPersian,
-    arabic_chars::HasArabic,
-    digits::DigitsEn2Fa,
-};
+use rust_persian_tools::{arabic_chars::HasArabic, digits::DigitsEn2Fa, persian_chars::HasPersian};
 use telegram_types::bot::{
     methods::{
-        ApproveJoinRequest, ChatTarget, DeclineJoinRequest, DeleteMessage, ReplyMarkup,
-        RestrictChatMember, SendMessage, TelegramResult,
+        AnswerCallbackQuery, ApproveJoinRequest, ChatTarget, DeclineJoinRequest, DeleteMessage,
+        GetChatMember, ReplyMarkup, RestrictChatMember, SendMessage, TelegramResult,
     },
     types::{
-        ChatId, ChatPermissions, InlineKeyboardButton, InlineKeyboardButtonPressed,
-        InlineKeyboardMarkup, Message, MessageId, ParseMode, Update, UpdateContent, User, UserId,
+        ChatId, ChatMemberStatus, ChatPermissions, InlineKeyboardButton,
+        InlineKeyboardButtonPressed, InlineKeyboardMarkup, Message, MessageId, ParseMode, Update,
+        UpdateContent, User, UserId,
     },
 };
 use worker::*;
 
 const JOIN_PREFIX: &str = "_JOIN_";
+const REPORT_PREFIX: &str = "_REPORT_";
 type FnCmd = dyn Fn(&Bot, &Message) -> Result<Response>;
+
+#[derive(serde::Serialize)]
+struct ReportEntry {
+    chat_id: i64,
+    reported_user_id: i64,
+    reported_by_user_id: i64,
+    join_message_id: i64,
+    reported_at: u64,
+}
 
 pub struct Bot {
     _token: String,
@@ -152,12 +159,17 @@ impl Bot {
             })
             .collect::<Vec<InlineKeyboardButton>>();
 
+        let report_key = InlineKeyboardButton {
+            text: "Report".to_string(),
+            pressed: InlineKeyboardButtonPressed::CallbackData(report_callback_data(user.id)),
+        };
+
         let response: TelegramResult<Message> = telegram::send_json_request(
             &self._token,
             SendMessage::new(ChatTarget::Id(chat_id), message)
                 .parse_mode(ParseMode::Markdown)
                 .reply_markup(ReplyMarkup::InlineKeyboard(InlineKeyboardMarkup {
-                    inline_keyboard: vec![keys],
+                    inline_keyboard: vec![keys, vec![report_key]],
                 })),
         )
         .await?
@@ -194,6 +206,67 @@ impl Bot {
             },
         )
         .await;
+    }
+
+    async fn answer_callback(&self, callback_query_id: &str, text: &str, show_alert: bool) {
+        let _ = telegram::send_json_request(
+            &self._token,
+            AnswerCallbackQuery::new(callback_query_id.to_string())
+                .text(text.to_string())
+                .show_alert(show_alert),
+        )
+        .await;
+    }
+
+    async fn report_join_request(
+        &self,
+        callback_query_id: &str,
+        reporter_id: UserId,
+        msg: &Message,
+        reported_user_id: UserId,
+    ) -> Result<Response> {
+        let response = telegram::send_json_request(
+            &self._token,
+            GetChatMember {
+                chat_id: ChatTarget::Id(msg.chat.id),
+                user_id: reporter_id,
+            },
+        )
+        .await?
+        .json::<TelegramResult<telegram_types::bot::types::ChatMember>>()
+        .await?;
+
+        let Some(member) = response.result else {
+            self.answer_callback(callback_query_id, "Unable to verify admin status.", true)
+                .await;
+            return Response::empty();
+        };
+
+        if !is_admin_status(&member.status) {
+            self.answer_callback(
+                callback_query_id,
+                "Only group admins can report users.",
+                true,
+            )
+            .await;
+            return Response::empty();
+        }
+
+        let reported_at = Date::now().as_millis() / 1000;
+        let entry = ReportEntry {
+            chat_id: msg.chat.id.0,
+            reported_user_id: reported_user_id.0,
+            reported_by_user_id: reporter_id.0,
+            join_message_id: msg.message_id.0,
+            reported_at,
+        };
+        let key = report_key(msg.chat.id, reported_user_id, reporter_id, reported_at);
+        let value = serde_json::to_string(&entry).map_err(|e| Error::RustError(e.to_string()))?;
+        self.kv.put(&key, value)?.execute().await?;
+
+        self.answer_callback(callback_query_id, "Reported user recorded.", false)
+            .await;
+        Response::empty()
     }
 
     pub async fn process(&self, update: &Update) -> Result<Response> {
@@ -254,6 +327,14 @@ impl Bot {
             Some(UpdateContent::CallbackQuery(q)) => {
                 // ignore callbacks without an associated message
                 if let Some(msg) = &q.message {
+                    if let Some(reported_user_id) =
+                        q.data.as_deref().and_then(extract_reported_user_id)
+                    {
+                        return self
+                            .report_join_request(&q.id, q.from.id, msg, reported_user_id)
+                            .await;
+                    }
+
                     let key = format!("{}{}:{}", JOIN_PREFIX, msg.chat.id.0, msg.message_id.0);
 
                     let assigned_user = self.kv.get(&key).text().await?.unwrap_or_default();
@@ -314,6 +395,35 @@ fn extract_key_details(text: &str) -> (ChatId, MessageId) {
     (ChatId(chat_id), MessageId(message_id))
 }
 
+fn report_callback_data(user_id: UserId) -> String {
+    format!("{}{}", REPORT_PREFIX, user_id.0)
+}
+
+fn extract_reported_user_id(data: &str) -> Option<UserId> {
+    data.strip_prefix(REPORT_PREFIX)
+        .and_then(|user_id| user_id.parse::<i64>().ok())
+        .map(UserId)
+}
+
+fn report_key(
+    chat_id: ChatId,
+    reported_user_id: UserId,
+    reporter_id: UserId,
+    reported_at: u64,
+) -> String {
+    format!(
+        "{}{}:{}:{}:{}",
+        REPORT_PREFIX, chat_id.0, reported_user_id.0, reported_at, reporter_id.0
+    )
+}
+
+fn is_admin_status(status: &ChatMemberStatus) -> bool {
+    matches!(
+        status,
+        ChatMemberStatus::Creator | ChatMemberStatus::Administrator
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +443,25 @@ mod tests {
         let (chat_id, message_id) = extract_key_details(&format!("{}{}-", JOIN_PREFIX, 123));
         assert_eq!(chat_id.0, 0);
         assert_eq!(message_id.0, 0);
+    }
+
+    #[test]
+    fn test_report_callback_data() {
+        let data = report_callback_data(UserId(123));
+        assert_eq!(extract_reported_user_id(&data), Some(UserId(123)));
+        assert_eq!(extract_reported_user_id("_JOIN_123"), None);
+    }
+
+    #[test]
+    fn test_report_key() {
+        let key = report_key(ChatId(-100), UserId(123), UserId(456), 789);
+        assert_eq!(key, "_REPORT_-100:123:789:456");
+    }
+
+    #[test]
+    fn test_is_admin_status() {
+        assert!(is_admin_status(&ChatMemberStatus::Creator));
+        assert!(is_admin_status(&ChatMemberStatus::Administrator));
+        assert!(!is_admin_status(&ChatMemberStatus::Member));
     }
 }
